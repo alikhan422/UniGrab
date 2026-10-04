@@ -2,7 +2,7 @@
 import re
 import sys
 import time
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, QMutex, QWaitCondition
 import yt_dlp
 
 def sanitize_filename(name):
@@ -33,26 +33,47 @@ class DownloadWorker(QThread):
         self.target_format = target_format
         self.custom_filename = custom_filename
         self.playlist_items = str(playlist_items).strip() if playlist_items else ""
+        
+        self.mutex = QMutex()
+        self.pause_condition = QWaitCondition()
         self._is_paused = False
         self._is_cancelled = False
+        self._download_completed = False
         self.final_file_path = ""
 
     def pause(self):
+        self.mutex.lock()
         self._is_paused = True
+        self.mutex.unlock()
+        self.status_changed.emit("Paused")
 
     def resume(self):
+        self.mutex.lock()
         self._is_paused = False
+        self.pause_condition.wakeAll()
+        self.mutex.unlock()
+        self.status_changed.emit("Downloading")
 
     def cancel(self):
+        self.mutex.lock()
         self._is_cancelled = True
+        self._is_paused = False
+        self.pause_condition.wakeAll()
+        self.mutex.unlock()
+        self.status_changed.emit("Cancelled")
 
     def _progress_hook(self, d):
+        self.mutex.lock()
         if self._is_cancelled:
+            self.mutex.unlock()
             raise Exception("TASK_CANCELLED_BY_USER")
 
-        while self._is_paused and not self._is_cancelled:
-            self.status_changed.emit("Paused")
-            time.sleep(0.5)
+        while self._is_paused:
+            self.pause_condition.wait(self.mutex)
+            if self._is_cancelled:
+                self.mutex.unlock()
+                raise Exception("TASK_CANCELLED_BY_USER")
+        self.mutex.unlock()
 
         if d.get("status") == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
@@ -79,6 +100,7 @@ class DownloadWorker(QThread):
                 "remaining_str": format_bytes(remaining) if total > 0 else "Calculating...",
                 "filename": filename
             })
+
         elif d.get("status") == "finished":
             self.final_file_path = d.get("filename", "")
 
@@ -89,8 +111,6 @@ class DownloadWorker(QThread):
 
             is_playlist = bool(self.playlist_items or "list=" in self.url.lower())
 
-            # Agar playlist hai to har video ka apna original title aur index uthaye
-            # Koi custom ajeeb naam force nahi hoga
             if is_playlist:
                 out_tmpl = os.path.join(self.destination, "%(playlist_index|00)s - %(title).120s.%(ext)s")
             elif self.custom_filename:
@@ -124,17 +144,14 @@ class DownloadWorker(QThread):
                 "socket_timeout": 30,
                 "retries": 10,
                 "fragment_retries": 10,
-                "ignoreerrors": True,  # Agar playlist me koi 1 video unavailable ho to ruko mat, aagli download karo
+                "ignoreerrors": True,
             }
 
-            # Playlist handling rules
             if is_playlist:
                 ydl_opts["noplaylist"] = False
                 ydl_opts["extract_flat"] = False
                 if self.playlist_items:
-                    # Clean playlist items e.g. "16-43"
-                    cleaned_range = self.playlist_items.replace(" ", "")
-                    ydl_opts["playlist_items"] = cleaned_range
+                    ydl_opts["playlist_items"] = self.playlist_items.replace(" ", "")
             else:
                 ydl_opts["noplaylist"] = True
 
@@ -150,16 +167,16 @@ class DownloadWorker(QThread):
                 }]
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                self.status_changed.emit("Starting download...")
-                info = ydl.extract_info(self.url, download=True)
+                self.status_changed.emit("Downloading")
+                ydl.extract_info(self.url, download=True)
                 if not self.final_file_path:
                     self.final_file_path = self.destination
 
-            if not self._is_cancelled:
+            # Finished tab emit hoga jab task sach mein cancel ya pause na hua ho
+            if not self._is_cancelled and not self._is_paused:
                 self.finished.emit(self.final_file_path)
 
         except Exception as e:
             err_msg = str(e)
-            print(f"\n[DOWNLOAD ERROR DETECTED]: {err_msg}\n")
             if "TASK_CANCELLED_BY_USER" not in err_msg:
                 self.error_occurred.emit(err_msg)
