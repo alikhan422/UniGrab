@@ -3,10 +3,10 @@ import urllib.request
 import ssl
 from PyQt6.QtCore import QThread, pyqtSignal
 
-CURRENT_VERSION = "2.0.1"
+CURRENT_APP_VERSION = "2.0.1"
 UPDATE_SCHEMA_URL = "https://raw.githubusercontent.com/alikhan422/UniGrab/main/version.json"
 
-class UpdateCheckerThread(QThread):
+class AppUpdateChecker(QThread):
     update_available = pyqtSignal(dict)
     no_update = pyqtSignal()
     check_failed = pyqtSignal(str)
@@ -15,7 +15,7 @@ class UpdateCheckerThread(QThread):
         try:
             req = urllib.request.Request(
                 UPDATE_SCHEMA_URL,
-                headers={"User-Agent": "UniGrab-Studio-Client/2.0"}
+                headers={"User-Agent": "UniGrab-Studio-Client/2.0.1"}
             )
             context = ssl.create_default_context()
             context.check_hostname = False
@@ -26,7 +26,7 @@ class UpdateCheckerThread(QThread):
                     data = json.loads(response.read().decode('utf-8'))
                     remote_ver = data.get("version", "").strip()
                     
-                    if remote_ver and remote_ver != CURRENT_VERSION:
+                    if remote_ver and remote_ver != CURRENT_APP_VERSION:
                         self.update_available.emit(data)
                     else:
                         self.no_update.emit()
