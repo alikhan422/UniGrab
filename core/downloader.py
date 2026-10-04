@@ -38,6 +38,7 @@ class DownloadWorker(QThread):
         self.pause_condition = QWaitCondition()
         self._is_paused = False
         self._is_cancelled = False
+        self._has_completed_successfully = False
         self.final_file_path = ""
 
     def pause(self):
@@ -102,6 +103,7 @@ class DownloadWorker(QThread):
 
         elif d.get("status") == "finished":
             self.final_file_path = d.get("filename", "")
+            self._has_completed_successfully = True
 
     def run(self):
         try:
@@ -124,11 +126,9 @@ class DownloadWorker(QThread):
                 if m:
                     req_height = m.group(1)
 
-            # Universal IDM compatibility: H264 (avc1) + AAC audio
             if self.target_format == "mp3":
                 fmt = "bestaudio/best"
             elif req_height:
-                # Prefer exact standard H264 MP4 stream (IDM style), fallback to adaptive
                 fmt = f"bestvideo[height<={req_height}][vcodec^=avc]+bestaudio[acodec^=mp4a]/bestvideo[height<={req_height}]+bestaudio/best[height<={req_height}]/best"
             else:
                 fmt = "bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best"
@@ -136,17 +136,17 @@ class DownloadWorker(QThread):
             ydl_opts = {
                 "format": fmt,
                 "outtmpl": out_tmpl,
-                "merge_output_format": "mp4",  # Hamesha proper MP4 container banaye
+                "merge_output_format": "mp4",
                 "windowsfilenames": True,
                 "restrictfilenames": False,
                 "progress_hooks": [self._progress_hook],
                 "quiet": True,
                 "no_warnings": True,
                 "nocheckcertificate": True,
-                "socket_timeout": 30,
-                "retries": 10,
-                "fragment_retries": 10,
-                "ignoreerrors": True,
+                "socket_timeout": 15,
+                "retries": 3,
+                "fragment_retries": 3,
+                "ignoreerrors": False,
             }
 
             if is_playlist:
@@ -168,7 +168,6 @@ class DownloadWorker(QThread):
                     "preferredquality": "192",
                 }]
             else:
-                # Post-processor to ensure universal H.264 / AAC standard (TV & USB flash ready)
                 ydl_opts["postprocessors"] = [{
                     "key": "FFmpegVideoRemuxer",
                     "preferedformat": "mp4"
@@ -176,14 +175,20 @@ class DownloadWorker(QThread):
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 self.status_changed.emit("Downloading")
-                ydl.extract_info(self.url, download=True)
+                ret_code = ydl.download([self.url])
                 if not self.final_file_path:
                     self.final_file_path = self.destination
 
-            if not self._is_cancelled and not self._is_paused:
-                self.finished.emit(self.final_file_path)
+            if self._is_cancelled:
+                return
+
+            if ret_code != 0 or not self._has_completed_successfully:
+                raise Exception("Download interrupted: Network connection dropped before completing.")
+
+            self.finished.emit(self.final_file_path)
 
         except Exception as e:
             err_msg = str(e)
             if "TASK_CANCELLED_BY_USER" not in err_msg:
+                self.status_changed.emit("Failed")
                 self.error_occurred.emit(err_msg)
