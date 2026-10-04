@@ -1,0 +1,15 @@
+﻿__pycache__/
+*.py[cod]
+*$py.class
+*.exe
+*.dll
+dist/
+build/
+*.spec
+Installer_Output/
+.venv/
+venv/
+history.json
+settings.json
+.idea/
+.vscode/

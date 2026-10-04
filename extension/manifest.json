@@ -1,0 +1,20 @@
+﻿{
+  "manifest_version": 3,
+  "name": "UniGrab Download Module",
+  "version": "1.0.0",
+  "description": "Universal integration module for UniGrab Workstation.",
+  "permissions": [
+    "contextMenus",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "*://*/*",
+    "http://127.0.0.1:49814/*"
+  ],
+  "action": {
+    "default_title": "Download with UniGrab"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

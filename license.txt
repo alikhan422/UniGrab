@@ -1,0 +1,14 @@
+﻿UNIGRAB STUDIO END USER LICENSE AGREEMENT (EULA)
+
+Please read the following terms and conditions carefully before using this software.
+
+1. GRANT OF LICENSE
+UniGrab Studio grants you a personal, non-exclusive, non-transferable license to install and use this multimedia management software on your personal devices.
+
+2. FAIR USAGE POLICY
+You agree to use this software in compliance with all applicable local and international copyright laws. UniGrab Studio does not condone unauthorized distribution of copyrighted material.
+
+3. DISCLAIMER OF WARRANTY
+The software is provided "AS IS", without warranty of any kind, express or implied. The developers will not be liable for any damages arising out of the use or inability to use this software.
+
+By clicking "I accept the agreement", you acknowledge that you have read, understood, and agreed to be bound by these terms.

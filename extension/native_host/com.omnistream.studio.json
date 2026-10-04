@@ -1,0 +1,9 @@
+{
+  "name": "com.omnistream.studio",
+  "description": "UniGrab Studio Native Messaging Host",
+  "path": "F:\\UniGrab\\extension\\native_host\\host_bridge.py",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://nobklnejpbgjmoncohhkjnejjfhaffop/"
+  ]
+}
