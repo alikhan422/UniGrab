@@ -1,6 +1,6 @@
-﻿; Inno Setup Script for UniGrab Studio
+﻿; Inno Setup Script for UniGrab Studio v2.0.1
 #define MyAppName "UniGrab Studio"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "2.0.1"
 #define MyAppPublisher "UniGrab"
 #define MyAppExeName "UniGrab.exe"
 #define MySourceDir "F:\UniGrab\dist\UniGrab"
@@ -15,7 +15,7 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 LicenseFile=F:\UniGrab\license.txt
 OutputDir=F:\UniGrab\Installer_Output
-OutputBaseFilename=UniGrab_Setup_v1.0
+OutputBaseFilename=UniGrab_Setup_v2.0.1
 SetupIconFile=F:\UniGrab\assets\logo.ico
 Compression=lzma2/ultra64
 SolidCompression=yes

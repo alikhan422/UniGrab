@@ -6,11 +6,9 @@ from PyQt6.QtCore import QThread, pyqtSignal
 import yt_dlp
 
 def sanitize_filename(name):
-    # Standard and Unicode illegal file characters remove
     clean = re.sub(r'[\\/*?:"<>|｜]', " ", name)
     clean = re.sub(r'\s+', " ", clean).strip()
-    # Limit length to 100 chars to prevent Windows MAX_PATH errors
-    return clean[:100].strip() or "UniGrab_Download"
+    return clean[:120].strip() or "Media_Download"
 
 def format_bytes(b):
     if not b or b <= 0:
@@ -34,7 +32,7 @@ class DownloadWorker(QThread):
         self.format_selector = format_selector
         self.target_format = target_format
         self.custom_filename = custom_filename
-        self.playlist_items = playlist_items
+        self.playlist_items = str(playlist_items).strip() if playlist_items else ""
         self._is_paused = False
         self._is_cancelled = False
         self.final_file_path = ""
@@ -67,6 +65,7 @@ class DownloadWorker(QThread):
 
             speed = d.get("speed") or 0
             eta = d.get("eta") or 0
+            filename = os.path.basename(d.get("filename", ""))
 
             self.progress_changed.emit({
                 "percent": percent,
@@ -77,7 +76,8 @@ class DownloadWorker(QThread):
                 "remaining_bytes": remaining,
                 "downloaded_str": format_bytes(downloaded),
                 "total_str": format_bytes(total) if total > 0 else "Unknown",
-                "remaining_str": format_bytes(remaining) if total > 0 else "Calculating..."
+                "remaining_str": format_bytes(remaining) if total > 0 else "Calculating...",
+                "filename": filename
             })
         elif d.get("status") == "finished":
             self.final_file_path = d.get("filename", "")
@@ -87,9 +87,17 @@ class DownloadWorker(QThread):
             self.status_changed.emit("Connecting stream...")
             os.makedirs(self.destination, exist_ok=True)
 
-            clean_name = sanitize_filename(self.custom_filename) if self.custom_filename else "%(title).100s"
-            # Direct destination file path without redundant nested duplicate directories
-            out_tmpl = os.path.join(self.destination, f"{clean_name}.%(ext)s")
+            is_playlist = bool(self.playlist_items or "list=" in self.url.lower())
+
+            # Agar playlist hai to har video ka apna original title aur index uthaye
+            # Koi custom ajeeb naam force nahi hoga
+            if is_playlist:
+                out_tmpl = os.path.join(self.destination, "%(playlist_index|00)s - %(title).120s.%(ext)s")
+            elif self.custom_filename:
+                clean_name = sanitize_filename(self.custom_filename)
+                out_tmpl = os.path.join(self.destination, f"{clean_name}.%(ext)s")
+            else:
+                out_tmpl = os.path.join(self.destination, "%(title).120s.%(ext)s")
 
             req_height = None
             if self.format_selector:
@@ -108,21 +116,31 @@ class DownloadWorker(QThread):
                 "format": fmt,
                 "outtmpl": out_tmpl,
                 "windowsfilenames": True,
+                "restrictfilenames": False,
                 "progress_hooks": [self._progress_hook],
                 "quiet": True,
                 "no_warnings": True,
                 "nocheckcertificate": True,
                 "socket_timeout": 30,
                 "retries": 10,
-                "fragment_retries": 10
+                "fragment_retries": 10,
+                "ignoreerrors": True,  # Agar playlist me koi 1 video unavailable ho to ruko mat, aagli download karo
             }
+
+            # Playlist handling rules
+            if is_playlist:
+                ydl_opts["noplaylist"] = False
+                ydl_opts["extract_flat"] = False
+                if self.playlist_items:
+                    # Clean playlist items e.g. "16-43"
+                    cleaned_range = self.playlist_items.replace(" ", "")
+                    ydl_opts["playlist_items"] = cleaned_range
+            else:
+                ydl_opts["noplaylist"] = True
 
             ffmpeg_local = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ffmpeg.exe")
             if os.path.exists(ffmpeg_local):
                 ydl_opts["ffmpeg_location"] = ffmpeg_local
-
-            if self.playlist_items:
-                ydl_opts["playlist_items"] = self.playlist_items
 
             if self.target_format == "mp3":
                 ydl_opts["postprocessors"] = [{
@@ -134,11 +152,12 @@ class DownloadWorker(QThread):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 self.status_changed.emit("Starting download...")
                 info = ydl.extract_info(self.url, download=True)
-                if not self.final_file_path and info:
-                    self.final_file_path = ydl.prepare_filename(info)
+                if not self.final_file_path:
+                    self.final_file_path = self.destination
 
             if not self._is_cancelled:
                 self.finished.emit(self.final_file_path)
+
         except Exception as e:
             err_msg = str(e)
             print(f"\n[DOWNLOAD ERROR DETECTED]: {err_msg}\n")
