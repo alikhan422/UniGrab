@@ -2,6 +2,8 @@
 import re
 import sys
 import time
+import urllib.request
+import urllib.parse
 from PyQt6.QtCore import QThread, pyqtSignal, QMutex, QWaitCondition
 import yt_dlp
 
@@ -18,6 +20,28 @@ def format_bytes(b):
             return f"{b:.1f} {unit}"
         b /= 1024.0
     return f"{b:.1f} PB"
+
+def sniff_real_filename_from_headers(url):
+    """Detect real filename from Content-Disposition HTTP header."""
+    try:
+        req = urllib.request.Request(
+            url, 
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, 
+            method="HEAD"
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            cd = resp.headers.get("Content-Disposition", "")
+            if cd:
+                m = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\r\n]+)["\']?', cd, re.IGNORECASE)
+                if m:
+                    raw_name = urllib.parse.unquote(m.group(1).strip())
+                    clean = sanitize_filename(raw_name)
+                    # Agar extension sath lagi ho to strip kar lein
+                    base, _ = os.path.splitext(clean)
+                    return base or clean
+    except Exception:
+        pass
+    return ""
 
 class DownloadWorker(QThread):
     progress_changed = pyqtSignal(dict)
@@ -113,9 +137,12 @@ class DownloadWorker(QThread):
             is_playlist_url = bool("list=" in self.url.lower())
             has_specific_items = bool(self.playlist_items)
 
-            # Accurate Playlist Folder Naming (Fixes "show" or broken names)
+            # Check real filename from Content-Disposition header if tokenized direct link
+            detected_header_name = ""
+            if not is_playlist_url and not self.custom_filename:
+                detected_header_name = sniff_real_filename_from_headers(self.url)
+
             if is_playlist_url and not has_specific_items:
-                # %(playlist_title|%(playlist|Playlist))s ensures accurate original playlist name
                 target_dir = os.path.join(self.destination, "%(playlist_title|%(playlist|Playlist))s")
                 out_tmpl = os.path.join(target_dir, "%(playlist_index|00)s - %(title).120s.%(ext)s")
             elif is_playlist_url and has_specific_items:
@@ -123,6 +150,8 @@ class DownloadWorker(QThread):
             elif self.custom_filename:
                 clean_name = sanitize_filename(self.custom_filename)
                 out_tmpl = os.path.join(self.destination, f"{clean_name}.%(ext)s")
+            elif detected_header_name:
+                out_tmpl = os.path.join(self.destination, f"{detected_header_name}.%(ext)s")
             else:
                 out_tmpl = os.path.join(self.destination, "%(title).120s.%(ext)s")
 
