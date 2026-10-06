@@ -1,20 +1,20 @@
 ﻿{
   "manifest_version": 3,
-  "name": "UniGrab Download Module",
-  "version": "1.0.0",
-  "description": "Universal integration module for UniGrab Workstation.",
+  "name": "UniGrab Downloader Integration",
+  "version": "2.0.1",
+  "description": "Send video and audio links directly to UniGrab Desktop Downloader",
   "permissions": [
     "contextMenus",
     "activeTab"
   ],
   "host_permissions": [
-    "*://*/*",
-    "http://127.0.0.1:49814/*"
+    "http://127.0.0.1:49814/*",
+    "http://localhost:49814/*"
   ],
-  "action": {
-    "default_title": "Download with UniGrab"
-  },
   "background": {
     "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "UniGrab Downloader"
   }
 }

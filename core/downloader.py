@@ -6,7 +6,7 @@ from PyQt6.QtCore import QThread, pyqtSignal, QMutex, QWaitCondition
 import yt_dlp
 
 def sanitize_filename(name):
-    clean = re.sub(r'[\\/*?:"<>|｜]', " ", name)
+    clean = re.sub(r'[\\/*?:"<>|｜]', " ", str(name))
     clean = re.sub(r'\s+', " ", clean).strip()
     return clean[:120].strip() or "Media_Download"
 
@@ -29,8 +29,8 @@ class DownloadWorker(QThread):
         super().__init__()
         self.url = url
         self.destination = destination
-        self.format_selector = format_selector
-        self.target_format = target_format
+        self.format_selector = str(format_selector or "best")
+        self.target_format = str(target_format or "mp4").lower()
         self.custom_filename = custom_filename
         self.playlist_items = str(playlist_items).strip() if playlist_items else ""
         
@@ -110,9 +110,15 @@ class DownloadWorker(QThread):
             self.status_changed.emit("Connecting stream...")
             os.makedirs(self.destination, exist_ok=True)
 
-            is_playlist = bool(self.playlist_items or "list=" in self.url.lower())
+            is_playlist_url = bool("list=" in self.url.lower())
+            has_specific_items = bool(self.playlist_items)
 
-            if is_playlist:
+            # Accurate Playlist Folder Naming (Fixes "show" or broken names)
+            if is_playlist_url and not has_specific_items:
+                # %(playlist_title|%(playlist|Playlist))s ensures accurate original playlist name
+                target_dir = os.path.join(self.destination, "%(playlist_title|%(playlist|Playlist))s")
+                out_tmpl = os.path.join(target_dir, "%(playlist_index|00)s - %(title).120s.%(ext)s")
+            elif is_playlist_url and has_specific_items:
                 out_tmpl = os.path.join(self.destination, "%(playlist_index|00)s - %(title).120s.%(ext)s")
             elif self.custom_filename:
                 clean_name = sanitize_filename(self.custom_filename)
@@ -121,10 +127,9 @@ class DownloadWorker(QThread):
                 out_tmpl = os.path.join(self.destination, "%(title).120s.%(ext)s")
 
             req_height = None
-            if self.format_selector:
-                m = re.search(r'(\d{3,4})p?', str(self.format_selector))
-                if m:
-                    req_height = m.group(1)
+            m = re.search(r'(\d{3,4})p?', self.format_selector)
+            if m:
+                req_height = m.group(1)
 
             if self.target_format == "mp3":
                 fmt = "bestaudio/best"
@@ -132,6 +137,8 @@ class DownloadWorker(QThread):
                 fmt = f"bestvideo[height<={req_height}][vcodec^=avc]+bestaudio[acodec^=mp4a]/bestvideo[height<={req_height}]+bestaudio/best[height<={req_height}]/best"
             else:
                 fmt = "bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best"
+
+            ffmpeg_local = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ffmpeg.exe")
 
             ydl_opts = {
                 "format": fmt,
@@ -143,21 +150,20 @@ class DownloadWorker(QThread):
                 "quiet": True,
                 "no_warnings": True,
                 "nocheckcertificate": True,
-                "socket_timeout": 15,
-                "retries": 3,
-                "fragment_retries": 3,
+                "socket_timeout": 20,
+                "retries": 5,
+                "fragment_retries": 5,
                 "ignoreerrors": False,
             }
 
-            if is_playlist:
+            if is_playlist_url:
                 ydl_opts["noplaylist"] = False
                 ydl_opts["extract_flat"] = False
-                if self.playlist_items:
+                if has_specific_items:
                     ydl_opts["playlist_items"] = self.playlist_items.replace(" ", "")
             else:
                 ydl_opts["noplaylist"] = True
 
-            ffmpeg_local = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ffmpeg.exe")
             if os.path.exists(ffmpeg_local):
                 ydl_opts["ffmpeg_location"] = ffmpeg_local
 
@@ -172,6 +178,9 @@ class DownloadWorker(QThread):
                     "key": "FFmpegVideoRemuxer",
                     "preferedformat": "mp4"
                 }]
+                ydl_opts["postprocessor_args"] = {
+                    "VideoRemuxer": ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]
+                }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 self.status_changed.emit("Downloading")

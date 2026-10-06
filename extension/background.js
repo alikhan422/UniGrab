@@ -1,43 +1,36 @@
-﻿const UNIGRAB_ENDPOINT = "http://127.0.0.1:49814/";
-
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: "unigrab_download_link",
-      title: "Download with UniGrab",
-      contexts: ["link", "video", "audio"]
-    });
-    chrome.contextMenus.create({
-      id: "unigrab_download_page",
-      title: "Download Page Media with UniGrab",
-      contexts: ["page"]
-    });
+﻿chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: "unigrab_download_link",
+    title: "Download with UniGrab",
+    contexts: ["link", "video", "audio", "page"]
   });
 });
 
-if (chrome.contextMenus && chrome.contextMenus.onClicked) {
-  chrome.contextMenus.onClicked.addListener((info, tab) => {
-    let targetUrl = info.linkUrl || info.srcUrl || info.pageUrl;
-    if (targetUrl) {
-      sendToUniGrab(targetUrl);
-    }
-  });
-}
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  const targetUrl = info.linkUrl || info.srcUrl || info.pageUrl || "";
+  if (!targetUrl) return;
 
-if (chrome.action && chrome.action.onClicked) {
-  chrome.action.onClicked.addListener((tab) => {
-    if (tab && tab.url) {
-      sendToUniGrab(tab.url);
-    }
-  });
-}
-
-function sendToUniGrab(url) {
-  fetch(UNIGRAB_ENDPOINT, {
+  fetch("http://127.0.0.1:49814/download", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: url })
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ url: targetUrl })
   }).catch((err) => {
-    console.log("UniGrab not reachable or running in background:", err);
+    console.log("UniGrab desktop client not running or unreachable:", err);
   });
-}
+});
+
+chrome.action.onClicked.addListener((tab) => {
+  if (tab && tab.url) {
+    fetch("http://127.0.0.1:49814/download", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ url: tab.url })
+    }).catch((err) => {
+      console.log("UniGrab desktop client unreachable:", err);
+    });
+  }
+});
