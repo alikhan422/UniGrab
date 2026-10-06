@@ -129,6 +129,16 @@ class DownloadCardWidget(QFrame):
         self.lbl_meta.setText(f"{speed_str} • {status_str}")
 
 class MainWindow(QMainWindow):
+
+    def _update_task_title(self, task, new_title):
+        try:
+            row = task.get('row', 0) if isinstance(task, dict) else getattr(task, 'row', 0)
+            if hasattr(self, 'table') and row < self.table.rowCount():
+                item = self.table.item(row, 0)
+                if item:
+                    item.setText(new_title)
+        except Exception:
+            pass
     def __init__(self):
         super().__init__()
         self.is_really_quitting = False
@@ -451,6 +461,7 @@ class MainWindow(QMainWindow):
             task["card_widget"].btn_pause.setEnabled(True)
             task["card_widget"].btn_stop.setEnabled(True)
 
+        worker.title_resolved.connect(lambda t, tk=task: self._update_task_title(tk, t))
         worker.progress_changed.connect(lambda d, t=task: self._on_progress_update(t, d))
         worker.status_changed.connect(lambda st, t=task: self._on_status_update(t, st))
         worker.finished.connect(lambda p, t=task: self._handle_download_completed(t, p))

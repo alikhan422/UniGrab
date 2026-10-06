@@ -22,7 +22,6 @@ def format_bytes(b):
     return f"{b:.1f} PB"
 
 def sniff_real_filename_from_headers(url):
-    """Detect real filename from Content-Disposition HTTP header."""
     try:
         req = urllib.request.Request(
             url, 
@@ -36,7 +35,6 @@ def sniff_real_filename_from_headers(url):
                 if m:
                     raw_name = urllib.parse.unquote(m.group(1).strip())
                     clean = sanitize_filename(raw_name)
-                    # Agar extension sath lagi ho to strip kar lein
                     base, _ = os.path.splitext(clean)
                     return base or clean
     except Exception:
@@ -48,6 +46,7 @@ class DownloadWorker(QThread):
     status_changed = pyqtSignal(str)
     finished = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    title_resolved = pyqtSignal(str)
 
     def __init__(self, url, destination, format_selector="best", target_format="mp4", custom_filename="", playlist_items=""):
         super().__init__()
@@ -64,6 +63,7 @@ class DownloadWorker(QThread):
         self._is_cancelled = False
         self._has_completed_successfully = False
         self.final_file_path = ""
+        self._has_emitted_title = False
 
     def pause(self):
         self.mutex.lock()
@@ -99,6 +99,14 @@ class DownloadWorker(QThread):
                 raise Exception("TASK_CANCELLED_BY_USER")
         self.mutex.unlock()
 
+        raw_fname = d.get("filename", "")
+        if raw_fname and not self._has_emitted_title:
+            bname = os.path.basename(raw_fname)
+            root_name, _ = os.path.splitext(bname)
+            if not root_name.startswith("ADGPM") and len(root_name) < 100:
+                self.title_resolved.emit(root_name)
+                self._has_emitted_title = True
+
         if d.get("status") == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
             downloaded = d.get("downloaded_bytes") or 0
@@ -110,7 +118,7 @@ class DownloadWorker(QThread):
 
             speed = d.get("speed") or 0
             eta = d.get("eta") or 0
-            filename = os.path.basename(d.get("filename", ""))
+            filename = os.path.basename(raw_fname)
 
             self.progress_changed.emit({
                 "percent": percent,
@@ -126,7 +134,7 @@ class DownloadWorker(QThread):
             })
 
         elif d.get("status") == "finished":
-            self.final_file_path = d.get("filename", "")
+            self.final_file_path = raw_fname
             self._has_completed_successfully = True
 
     def run(self):
@@ -137,10 +145,12 @@ class DownloadWorker(QThread):
             is_playlist_url = bool("list=" in self.url.lower())
             has_specific_items = bool(self.playlist_items)
 
-            # Check real filename from Content-Disposition header if tokenized direct link
             detected_header_name = ""
             if not is_playlist_url and not self.custom_filename:
                 detected_header_name = sniff_real_filename_from_headers(self.url)
+                if detected_header_name:
+                    self.title_resolved.emit(detected_header_name)
+                    self._has_emitted_title = True
 
             if is_playlist_url and not has_specific_items:
                 target_dir = os.path.join(self.destination, "%(playlist_title|%(playlist|Playlist))s")
