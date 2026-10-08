@@ -132,13 +132,33 @@ class MainWindow(QMainWindow):
 
     def _update_task_title(self, task, new_title):
         try:
-            row = task.get('row', 0) if isinstance(task, dict) else getattr(task, 'row', 0)
-            if hasattr(self, 'table') and row < self.table.rowCount():
-                item = self.table.item(row, 0)
-                if item:
-                    item.setText(new_title)
+            if not new_title or str(new_title).startswith("http"):
+                return
+            task["title"] = new_title
+            target_url = task.get("url", "")
+            
+            # Update Table View
+            if hasattr(self, "table"):
+                for r in range(self.table.rowCount()):
+                    item = self.table.item(r, 0)
+                    if item:
+                        current_text = item.text().strip()
+                        # Agar current cell me URL likha ho ya is task ka URL ho
+                        if current_text == target_url or current_text.startswith("http"):
+                            item.setText(new_title)
+                            break
+
+            # Update Cards View
+            if hasattr(self, "cards_layout"):
+                for i in range(self.cards_layout.count()):
+                    w = self.cards_layout.itemAt(i).widget()
+                    if w and hasattr(w, "lbl_title"):
+                        if w.lbl_title.text().strip() == target_url or w.lbl_title.text().startswith("http"):
+                            w.lbl_title.setText(new_title)
+                            break
         except Exception:
             pass
+
     def __init__(self):
         super().__init__()
         self.is_really_quitting = False

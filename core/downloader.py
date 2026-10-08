@@ -21,25 +21,16 @@ def format_bytes(b):
         b /= 1024.0
     return f"{b:.1f} PB"
 
-def sniff_real_filename_from_headers(url):
-    try:
-        req = urllib.request.Request(
-            url, 
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, 
-            method="HEAD"
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            cd = resp.headers.get("Content-Disposition", "")
-            if cd:
-                m = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\r\n]+)["\']?', cd, re.IGNORECASE)
-                if m:
-                    raw_name = urllib.parse.unquote(m.group(1).strip())
-                    clean = sanitize_filename(raw_name)
-                    base, _ = os.path.splitext(clean)
-                    return base or clean
-    except Exception:
-        pass
-    return ""
+def clean_media_title(raw_title):
+    if not raw_title:
+        return ""
+    t = str(raw_title).strip()
+    # Strip web extensions or temp suffixes
+    t = re.sub(r'\.(mp4|mkv|webm|mp3|3gp|part|ytdl)$', '', t, flags=re.IGNORECASE)
+    # Strip token hashes or URL patterns
+    if t.startswith("http://") or t.startswith("https://") or t.startswith("ADGPM"):
+        return ""
+    return sanitize_filename(t)
 
 class DownloadWorker(QThread):
     progress_changed = pyqtSignal(dict)
@@ -52,18 +43,18 @@ class DownloadWorker(QThread):
         super().__init__()
         self.url = url
         self.destination = destination
-        self.format_selector = str(format_selector or "best")
-        self.target_format = str(target_format or "mp4").lower()
-        self.custom_filename = custom_filename
+        self.format_selector = str(format_selector or "best").strip()
+        self.target_format = str(target_format or "mp4").lower().strip()
+        self.custom_filename = clean_media_title(custom_filename)
         self.playlist_items = str(playlist_items).strip() if playlist_items else ""
         
         self.mutex = QMutex()
         self.pause_condition = QWaitCondition()
         self._is_paused = False
         self._is_cancelled = False
-        self._has_completed_successfully = False
         self.final_file_path = ""
         self._has_emitted_title = False
+        self._last_percent = 0.0
 
     def pause(self):
         self.mutex.lock()
@@ -99,12 +90,19 @@ class DownloadWorker(QThread):
                 raise Exception("TASK_CANCELLED_BY_USER")
         self.mutex.unlock()
 
-        raw_fname = d.get("filename", "")
-        if raw_fname and not self._has_emitted_title:
-            bname = os.path.basename(raw_fname)
-            root_name, _ = os.path.splitext(bname)
-            if not root_name.startswith("ADGPM") and len(root_name) < 100:
-                self.title_resolved.emit(root_name)
+        # Extract title from active yt-dlp download info
+        if not self._has_emitted_title:
+            info_dict = d.get("info_dict") or {}
+            live_title = info_dict.get("title") or ""
+            if not live_title:
+                fname = d.get("filename", "")
+                if fname:
+                    bname = os.path.basename(fname)
+                    live_title = re.sub(r'\.(mp4|mkv|webm|mp3|3gp|part|f\d+)$', '', bname, flags=re.IGNORECASE)
+
+            clean_t = clean_media_title(live_title)
+            if clean_t and clean_t.lower() not in ["show", "video", "media_download"]:
+                self.title_resolved.emit(clean_t)
                 self._has_emitted_title = True
 
         if d.get("status") == "downloading":
@@ -115,10 +113,11 @@ class DownloadWorker(QThread):
             percent = 0.0
             if total > 0:
                 percent = (downloaded / total) * 100.0
+            self._last_percent = percent
 
             speed = d.get("speed") or 0
             eta = d.get("eta") or 0
-            filename = os.path.basename(raw_fname)
+            filename = os.path.basename(d.get("filename", ""))
 
             self.progress_changed.emit({
                 "percent": percent,
@@ -134,23 +133,20 @@ class DownloadWorker(QThread):
             })
 
         elif d.get("status") == "finished":
-            self.final_file_path = raw_fname
-            self._has_completed_successfully = True
+            self.final_file_path = d.get("filename", "")
+            self._last_percent = 100.0
 
     def run(self):
         try:
             self.status_changed.emit("Connecting stream...")
             os.makedirs(self.destination, exist_ok=True)
 
-            is_playlist_url = bool("list=" in self.url.lower())
+            is_playlist_url = bool("list=" in self.url.lower() or "season=" in self.url.lower())
             has_specific_items = bool(self.playlist_items)
 
-            detected_header_name = ""
-            if not is_playlist_url and not self.custom_filename:
-                detected_header_name = sniff_real_filename_from_headers(self.url)
-                if detected_header_name:
-                    self.title_resolved.emit(detected_header_name)
-                    self._has_emitted_title = True
+            if self.custom_filename:
+                self.title_resolved.emit(self.custom_filename)
+                self._has_emitted_title = True
 
             if is_playlist_url and not has_specific_items:
                 target_dir = os.path.join(self.destination, "%(playlist_title|%(playlist|Playlist))s")
@@ -158,31 +154,35 @@ class DownloadWorker(QThread):
             elif is_playlist_url and has_specific_items:
                 out_tmpl = os.path.join(self.destination, "%(playlist_index|00)s - %(title).120s.%(ext)s")
             elif self.custom_filename:
-                clean_name = sanitize_filename(self.custom_filename)
-                out_tmpl = os.path.join(self.destination, f"{clean_name}.%(ext)s")
-            elif detected_header_name:
-                out_tmpl = os.path.join(self.destination, f"{detected_header_name}.%(ext)s")
+                out_tmpl = os.path.join(self.destination, f"{self.custom_filename}.%(ext)s")
             else:
                 out_tmpl = os.path.join(self.destination, "%(title).120s.%(ext)s")
 
             req_height = None
-            m = re.search(r'(\d{3,4})p?', self.format_selector)
+            m = re.search(r'(\d{3,4})', self.format_selector)
             if m:
                 req_height = m.group(1)
 
             if self.target_format == "mp3":
                 fmt = "bestaudio/best"
+                merge_fmt = None
+            elif self.target_format == "3gp":
+                h = req_height if req_height else "240"
+                fmt = f"bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
+                merge_fmt = "3gp"
             elif req_height:
-                fmt = f"bestvideo[height<={req_height}][vcodec^=avc]+bestaudio[acodec^=mp4a]/bestvideo[height<={req_height}]+bestaudio/best[height<={req_height}]/best"
+                fmt = f"bestvideo[height={req_height}][vcodec^=avc]+bestaudio[acodec^=mp4a]/bestvideo[height<={req_height}][vcodec^=avc]+bestaudio/bestvideo[height<={req_height}]+bestaudio/best[height<={req_height}]"
+                merge_fmt = "mp4"
             else:
                 fmt = "bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best"
+                merge_fmt = "mp4"
 
-            ffmpeg_local = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ffmpeg.exe")
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            ffmpeg_local = os.path.join(base_dir, "ffmpeg.exe")
 
             ydl_opts = {
                 "format": fmt,
                 "outtmpl": out_tmpl,
-                "merge_output_format": "mp4",
                 "windowsfilenames": True,
                 "restrictfilenames": False,
                 "progress_hooks": [self._progress_hook],
@@ -194,6 +194,9 @@ class DownloadWorker(QThread):
                 "fragment_retries": 5,
                 "ignoreerrors": False,
             }
+
+            if merge_fmt:
+                ydl_opts["merge_output_format"] = merge_fmt
 
             if is_playlist_url:
                 ydl_opts["noplaylist"] = False
@@ -212,6 +215,14 @@ class DownloadWorker(QThread):
                     "preferredcodec": "mp3",
                     "preferredquality": "192",
                 }]
+            elif self.target_format == "3gp":
+                ydl_opts["postprocessors"] = [{
+                    "key": "FFmpegVideoRemuxer",
+                    "preferedformat": "3gp"
+                }]
+                ydl_opts["postprocessor_args"] = {
+                    "VideoRemuxer": ["-c:v", "h263", "-s", "352x288", "-r", "15", "-c:a", "aac", "-b:a", "64k", "-ar", "16000"]
+                }
             else:
                 ydl_opts["postprocessors"] = [{
                     "key": "FFmpegVideoRemuxer",
@@ -230,9 +241,10 @@ class DownloadWorker(QThread):
             if self._is_cancelled:
                 return
 
-            if ret_code != 0 or not self._has_completed_successfully:
+            if ret_code != 0 and self._last_percent < 99.0:
                 raise Exception("Download interrupted: Network connection dropped before completing.")
 
+            self.status_changed.emit("Completed")
             self.finished.emit(self.final_file_path)
 
         except Exception as e:
